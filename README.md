@@ -622,14 +622,18 @@ dds <- DESeqDataSetFromMatrix(countData = counts_EC,
 keep <- rowSums(counts(dds)) >=10
 dds <- dds[keep,]
 
+# specifying the reference level
+
+dds$condition <- relevel(dds$condition, ref = "ctrl")
+
 #running DESeq
 
-dds <- DESeq(dds)
+dds <- DESeq(dds, test="LRT", reduced=~1)
 
 #seeing the results
 resultsNames(dds)#showing us the different groups that we can compare
 
-res <- results(dds, name = "condition_ctrl_vs_AP")
+res <- results(dds, name = "condition_AP_vs_ctrl")
 res
 
 # output tables
