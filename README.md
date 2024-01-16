@@ -851,85 +851,113 @@ H.gene.name.ls <- H %>%
 
 #GSEA does not need cutoff non-significant pvalue since padj significancy is not a proper treshold here 
 ##ranking the gene dataset
-DEG <- sign(DEG$log2FoldChange)*(-log10(DEG$pvalue)) # we will use the signed p values from spatial DGE as ranking
-names(DEG) <- DEG$gene # genes as names#
-head(DEG)
-DEG <- sort(DEG, decreasing = TRUE) # sort genes by ranking
-plot(DEG)
+# FGSEA Analysis ====================================================
+## 1. Read in data -----------------------------------------------------------
+
+df <- read.csv(paste0('DESeqECmainAP.csv'))
+## 2. Prepare background genes -----------------------------------------------
+#
+#https://www.gsea-msigdb.org/gsea/msigdb/collections.jsp
+# For GSEA
+
+#Get gene set database online
+# Print all rows of the tibble returned by msigdbr_collections()
+print(msigdbr_collections(), n = Inf)
+
+database = msigdbr(species = "mouse", category = "H")
+#category2 = msigdbr(species = "mouse", category = "C5", subcategory = "WIKIPATHWAYS")
+#category3 = msigdbr(species = "mouse", category = "C5", subcategory = "KEGG")
+#category4 = msigdbr(species = "mouse", category = "C5", subcategory = "REACTOME")
+#category5 = msigdbr(species = "mouse", category = "C2", subcategory = "BP")
+
+#database = rbind(category1 , category2, category3, category4, category5)
+head(database)
+
+class(database)
+
+database <- database %>% 
+  select(gs_name, gene_symbol) %>% 
+  group_by(gs_name) %>% 
+  summarise(all.genes = list(unique(gene_symbol))) %>% 
+  deframe()
+
+head(database)
+##ranking our geneset
+#in fgsea we do not need to subset our significant differentially expressed genes
+#therfore we just need to rank our DEseq result (geneset) based on log2fc and pval metrics
+
+rankings <- sign(df$log2FoldChange)*(-log10(df$pvalue)) # we will use the signed p values from spatial DGE as ranking
+names(rankings) <- df$gene # genes as names#
+head(rankings)
+rankings <- sort(rankings, decreasing = TRUE) # sort genes by ranking
+plot(rankings)
 
 #to check if we have infinite ranking because fgsea does not accept non-finit numbers
-max(DEG)
-min(DEG)
+max(rankings)
+min(rankings)
+#if the result of max or min or both is inf we have to fix it as foolows
+## Some genes have such low p values that the signed pval is +- inf, we need to change it to the maximum * constant to avoid problems with fgsea
+#max_ranking <- max(rankings[is.finite(rankings)])
+#min_ranking <- min(rankings[is.finite(rankings)])
+#rankings <- replace(rankings, rankings > max_ranking, max_ranking * 10)
+#rankings <- replace(rankings, rankings < min_ranking, min_ranking * 10)
+#rankings <- sort(rankings, decreasing = TRUE) # sort genes by ranking
 
-#table(signif$pvalue >= 0.05)
-
-#Extract expression data
-FC <- as.data.frame(DEG$log2FoldChange) %>% 
-  as.data.frame(DEG$gene)%>% 
-  #Move gene IDs from rownames to a column
-  rownames_to_column("gene")
-
-#format for gsea 
-FC.vec <- FC$"signif$log2FoldChange"
-names(FC.vec) <- FC$gene
-
-#set score type 
-#min(FC.vec)
-#max(FC.vec)
-
-#bc we have + & - LFC standardiz it 
-
-#scoreType <- "std"
-
-#Run GSEA#####
-#the number of nperm=1000 can increase till 1milion depending on the pvalue that you have
-#gsea.H <- fgseaSimple(pathways = H.gene.name.ls,
-#                      stats = FC.vec,
-#                      scoreType = scoreType,
-#                      nperm=1000)
+#you can also check the rankings of a specific set of genes and a nicer plot with ggplot
+ggplot(data.frame(gene_symbol = names(rankings)[1:50], ranks = rankings[1:50]), aes(gene_symbol, ranks)) + 
+  geom_point() +
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+## 4. Run GSEA ---------------------------------------------------------------
+# Easy peasy! Run fgsea with the pathways 
+GSEAres <- fgsea(pathways = database, # List of gene sets to check
+                 stats = rankings,
+                 scoreType = 'std', # in this case we have both pos and neg rankings. if only pos or neg, set to 'pos', 'neg'
+                 minSize = 10,
+                 maxSize = 500,
+                 nproc = 1) # for parallelisation
 
 
-
-
-
-###Sahel fgsea##
-gsea.H <- fgseaSimple(pathways = H.gene.name.ls,
-                      stats = FC.vec,
-                      minSize  = 1,
-                      maxSize  = 1000,
-                      nperm    = 1e7,
-                      nproc    = ceiling( detectCores() / 2 ))
-
-
-#### plot gsea results ####
-class(gsea.H)
-
-gsea.H %>% 
-  filter(pval <= 0.05) %>% 
-  #Beautify descriptions by removing _ and HALLMARK
-  mutate(pathway = gsub("HALLMARK_","", pathway),
-         pathway = gsub("_"," ", pathway)) %>% 
-  
-  ggplot(aes(x=reorder(pathway, NES), #Reorder gene sets by NES values
-             y=NES)) +
-  geom_col() +
-  theme_classic() +
-  #Force equal max min
-  lims(y=c(-3.2,3.2)) +
-  #Some more customization to pretty it up
-  #Flip x and y so long labels can be read
-  coord_flip() +
-  #fix labels
-  labs(y="Normalized enrichment score (NES), pval <= 0.05",
-       x="Gene set",
-       title = "Hallmark GSEA \nDown in +Mtb <--         --> Up in +Mtb")
-
-##output##
-#to write a table
-gsea.H <- apply(gsea.H,2,as.character)
-write.table(gsea.H, file="GSEA_DESeqECmainAP.csv", sep=",", row.names = F)
+##to save results
 
 # Save a single object to a file
-#saveRDS(gsea.H, "GSEA_DESeqECmainAP.csv")
+saveRDS(GSEAres, "GSEA_DESeqECmainAP.csv")
+
+#or table format
+GSEAres <- apply(GSEAres,2,as.character)
+
+write.table(GSEAres, file="FGSEA_DESeqECmainAP.csv", sep=",", row.names = F)
+
+GSEAres <- read.csv("GSEA_DESeqECmainAP.csv")
 
 
+## 6. Check results ------------------------------------------------------
+# Top 6 enriched pathways (ordered by p-val)
+head(GSEAres[order(pval), ])
+
+
+
+
+#to visualize FGSEA results
+sum(GSEAres[, padj < 0.05])
+sum(GSEAres[, pval < 0.01])
+
+topPathwaysUp <- GSEAres[ES > 0][head(order(padj)), pathway]
+topPathwaysDown <- GSEAres[ES < 0][head(order(padj)), pathway]
+topPathways <- c(topPathwaysUp, rev(topPathwaysDown))
+#pdf(file = paste0(filename, '_gsea_top30pathways.pdf'), width = 20, height = 15)
+plotGseaTable(database[topPathways], stats = rankings, fgseaRes = GSEAres, gseaParam = 0.5)
+#dev.off()
+
+
+# Select only independent pathways, removing redundancies/similar pathways
+collapsedPathways <- collapsePathways(GSEAres[order(padj)][padj < 0.05], database, rankings)
+mainPathways <- GSEAres[pathway %in% collapsedPathways$mainPathways][order(-NES), pathway]
+#pdf(file = paste0('GSEA/Selected_pathways/', paste0(filename, background_genes, '_gsea_mainpathways.pdf')), width = 20, height = 15)
+plotGseaTable(database[mainPathways], rankings, GSEAres, gseaParam = 0.5)
+#dev.off()
+
+# plot the most significantly enriched pathway
+plotEnrichment(database[[head(GSEAres[order(padj), ], 1)$pathway]],
+               rankings) + 
+  labs(title = head(GSEAres[order(padj), ], 1)$pathway)
